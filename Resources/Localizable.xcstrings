@@ -4996,6 +4996,26 @@
           }
         }
       }
+    },
+    "将干员列表 JSON 复制到剪贴板" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "오퍼레이터 목록 JSON을 클립보드에 복사"
+          }
+        }
+      }
+    },
+    "将干员列表 JSON 导出为文件" : {
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "오퍼레이터 목록 JSON을 파일로 내보내기"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
