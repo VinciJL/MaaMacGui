@@ -78,12 +78,28 @@ extension MAAOperBox {
         let rarity: Int
     }
 
+    /// 与 Windows `DataHelper._virtualOperators` 对齐的未实装/试用干员 charId，
+    /// 这些干员不出现在导出 JSON 中（Windows 遍历其全量干员表时本就轮不到它们）。
+    private static let excludedExportIDs: Set<String> = [
+        "char_504_rguard", "char_505_rcast", "char_506_rmedic", "char_507_rsnipe",
+        "char_508_aguard", "char_509_acast", "char_510_amedic", "char_511_asnipe",
+        "char_512_aprot", "char_513_apionr", "char_514_rdfend",
+        "char_600_cpione", "char_601_cguard", "char_602_cdfend", "char_603_csnipe",
+        "char_604_ccast", "char_605_cmedic", "char_606_csuppo", "char_607_cspec",
+        "char_608_acpion", "char_609_acguad", "char_610_acfend", "char_611_acnipe",
+        "char_612_accast", "char_613_acmedc", "char_614_acsupo", "char_615_acspec",
+        "char_616_pithst", "char_617_sharp2",
+        "char_1001_amiya2", "char_1037_amiya3",
+    ]
+
     /// 以 `all_opers` 为全量（保持其顺序），按 `id` 合并 `own_opers` 的精装/等级/潜能。
     /// 未匹配到的干员按未拥有导出（`elite/level/potential` 为 0，`own` 为 false）。
-    /// 只输出 `all_opers` 中存在的干员，与 Windows 遍历其全量干员表的语义一致。
+    /// 只输出 `all_opers` 中存在且非 `excludedExportIDs` 的干员，与 Windows 遍历其全量干员表的语义一致。
     var exportItems: [ExportItem] {
         let ownByID = Dictionary(own_opers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return all_opers.map { oper in
+        return all_opers
+            .filter { !Self.excludedExportIDs.contains($0.id) }
+            .map { oper in
             let owned = ownByID[oper.id]
             return ExportItem(
                 id: oper.id,
