@@ -67,8 +67,8 @@ extension MAAOperBox.OwnedOper {
 // MARK: - Export
 
 extension MAAOperBox {
-    /// 与 Windows 版“干员列表 JSON 导出”单条记录同构，键序即 Json.NET 的输出顺序。
-    struct ExportItem: Hashable {
+    /// 与 Windows 版“干员列表 JSON 导出”单条记录包含相同字段。
+    struct ExportItem: Codable {
         let id: String
         let name: String
         let elite: Int
@@ -100,56 +100,23 @@ extension MAAOperBox {
         return all_opers
             .filter { !Self.excludedExportIDs.contains($0.id) }
             .map { oper in
-            let owned = ownByID[oper.id]
-            return ExportItem(
-                id: oper.id,
-                name: oper.name,
-                elite: owned?.elite ?? 0,
-                level: owned?.level ?? 0,
-                own: owned?.own ?? false,
-                potential: owned?.potential ?? 0,
-                rarity: oper.rarity)
-        }
-    }
-
-    /// 缩进 JSON（UTF-8、无 BOM），剪贴板与文件正文共用此内容。
-    /// JSONEncoder 不保证键序，故手写序列化以匹配 Windows 的 `id,name,elite,level,own,potential,rarity` 顺序与 2 空格缩进。
-    var exportJSONData: Data? {
-        var lines = ["["]
-        for (index, item) in exportItems.enumerated() {
-            let objectComma = index < exportItems.count - 1 ? "," : ""
-            lines.append("  {")
-            lines.append("    \"id\": \(Self.jsonString(item.id)),")
-            lines.append("    \"name\": \(Self.jsonString(item.name)),")
-            lines.append("    \"elite\": \(item.elite),")
-            lines.append("    \"level\": \(item.level),")
-            lines.append("    \"own\": \(item.own ? "true" : "false"),")
-            lines.append("    \"potential\": \(item.potential),")
-            lines.append("    \"rarity\": \(item.rarity)")
-            lines.append("  }" + objectComma)
-        }
-        lines.append("]")
-        return lines.joined(separator: "\n").data(using: .utf8)
-    }
-
-    private static func jsonString(_ value: String) -> String {
-        var escaped = "\""
-        for scalar in value.unicodeScalars {
-            switch scalar.value {
-            case 0x22: escaped += "\\\"" // "
-            case 0x5C: escaped += "\\\\" // 反斜杠
-            case 0x08: escaped += "\\b"
-            case 0x0C: escaped += "\\f"
-            case 0x0A: escaped += "\\n"
-            case 0x0D: escaped += "\\r"
-            case 0x09: escaped += "\\t"
-            case 0x00...0x1F:
-                escaped += String(format: "\\u%04X", scalar.value)
-            default:
-                escaped.unicodeScalars.append(scalar)
+                let owned = ownByID[oper.id]
+                return ExportItem(
+                    id: oper.id,
+                    name: oper.name,
+                    elite: owned?.elite ?? 0,
+                    level: owned?.level ?? 0,
+                    own: owned?.own ?? false,
+                    potential: owned?.potential ?? 0,
+                    rarity: oper.rarity)
             }
-        }
-        escaped += "\""
-        return escaped
+    }
+
+    /// JSON（UTF-8、无 BOM），剪贴板与文件正文共用此内容。
+    /// 键顺序与缩进不属于 JSON 数据语义，由 JSONEncoder 负责序列化与字符串转义。
+    var exportJSONData: Data? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        return try? encoder.encode(exportItems)
     }
 }
