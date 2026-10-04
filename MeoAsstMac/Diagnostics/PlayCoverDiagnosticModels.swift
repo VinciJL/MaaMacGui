@@ -86,7 +86,7 @@ struct PlayCoverStaticResult: Sendable {
     var gameURL: URL?
     var port: Int?
 
-    /// These are real service prerequisites. Origin metadata, recommended
+    /// These are real service prerequisites. Version markers, recommended
     /// switches, graphics presets and MAA touch mode are independent findings.
     var runtimeBlockers: [PlayCoverDiagnosticItem] {
         let required = [

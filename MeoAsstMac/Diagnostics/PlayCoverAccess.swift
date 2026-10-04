@@ -7,10 +7,9 @@ import UniformTypeIdentifiers
     enum Location: String {
         case application, data
         var key: String { "PlayCoverDiagnostics.Bookmark.\(rawValue)" }
-        var policyKey: String { "\(key).PolicyVersion" }
     }
-    @Published private(set) var applicationURL: URL?
-    @Published private(set) var dataURL: URL?
+    @Published private(set) var applicationURL: URL
+    @Published private(set) var dataURL: URL
     @Published private(set) var message: String?
     private var scopedURLs = [Location: URL]()
     private let defaults: UserDefaults
@@ -73,7 +72,6 @@ import UniformTypeIdentifiers
         for location in [Location.application, .data] {
             scopedURLs.removeValue(forKey: location)?.stopAccessingSecurityScopedResource()
             defaults.removeObject(forKey: location.key)
-            defaults.removeObject(forKey: location.policyKey)
         }
         applicationURL = Self.defaultApplicationURL
         dataURL = Self.defaultDataURL
@@ -118,7 +116,6 @@ import UniformTypeIdentifiers
                 includingResourceValuesForKeys: nil, relativeTo: nil)
             try adopt(url, for: location)
             defaults.set(bookmark, forKey: location.key)
-            defaults.set(2, forKey: location.policyKey)
             message = nil
         } catch { message = error.localizedDescription }
     }
@@ -130,15 +127,6 @@ import UniformTypeIdentifiers
             let url = try URL(
                 resolvingBookmarkData: bookmark, options: [.withSecurityScope, .withoutUI],
                 relativeTo: nil, bookmarkDataIsStale: &stale)
-            // Migrate old automatic grants to system consent. A newly selected
-            // fallback (including a default path) remains a persistent grant.
-            let defaultURL = location == .application ? Self.defaultApplicationURL : Self.defaultDataURL
-            if url.standardizedFileURL == defaultURL.standardizedFileURL,
-                defaults.integer(forKey: location.policyKey) < 2
-            {
-                defaults.removeObject(forKey: location.key)
-                return
-            }
             guard !stale, url.startAccessingSecurityScopedResource() else {
                 message = String(localized: "自定义目录授权已失效，将检测默认路径；需要时重新选择自定义位置。")
                 return

@@ -243,7 +243,7 @@ import Testing
     @Test func missingInjectionBlocksServiceButKeepsGraphicsChecks() async throws {
         try await withGame(settings: ["maaTools": true, "maaToolsPort": 1717, "windowWidth": 0, "windowHeight": 720]) {
             access in
-            let executable = access.dataURL!.appendingPathComponent("Applications/\(snapshot.bundleID).app/game")
+            let executable = access.dataURL.appendingPathComponent("Applications/\(snapshot.bundleID).app/game")
             try macho(library: "/usr/lib/libSystem.B.dylib").write(to: executable)
             var probes = 0
             let model = PlayCoverDiagnosticModel(
@@ -309,7 +309,7 @@ import Testing
     @Test func orphanSettingsRemainReadableButMissingGameBlocksRuntime() async throws {
         try await withGame { access in
             try FileManager.default.removeItem(
-                at: access.dataURL!.appendingPathComponent("Applications/\(snapshot.bundleID).app"))
+                at: access.dataURL.appendingPathComponent("Applications/\(snapshot.bundleID).app"))
             var probes = 0
             let model = PlayCoverDiagnosticModel(
                 isGameRunning: { _ in true },
@@ -330,7 +330,7 @@ import Testing
 
     @Test func unreadableSettingsProduceOneRootFailureAndSkipChildren() async throws {
         try await withGame { access in
-            let url = access.dataURL!.appendingPathComponent("App Settings/\(snapshot.bundleID).plist")
+            let url = access.dataURL.appendingPathComponent("App Settings/\(snapshot.bundleID).plist")
             try Data("broken plist".utf8).write(to: url)
             var probes = 0
             let model = PlayCoverDiagnosticModel(

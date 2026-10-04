@@ -11,9 +11,9 @@ import Testing
             clientName: "官服", bundleID: "com.hypergryph.arknights", guiVersion: "test", coreVersion: "test")
     }
     private func settings(_ values: [String: Any]) throws -> PlayCoverGameSettings {
-        try PropertyListDecoder().decode(
-            PlayCoverGameSettings.self,
-            from: PropertyListSerialization.data(fromPropertyList: values, format: .binary, options: 0))
+        try PlayCoverStaticChecks.readSettings(
+            PropertyListSerialization.data(fromPropertyList: values, format: .binary, options: 0)
+        ).settings
     }
     private func status(_ id: String, in items: [PlayCoverDiagnosticItem]) -> PlayCoverDiagnosticStatus? {
         items.first { $0.id == id }?.status
@@ -22,28 +22,23 @@ import Testing
     @Test func testForkOnlyRequiresMAAVersionMarker() {
         for version in ["3.1.0.maa.10", "3.1.0-maa", "maa", "3.1.0.MAA.10"] {
             let info = ["CFBundleShortVersionString": version]
-            #expect(status("fork", in: PlayCoverStaticChecks.distribution(info: info, hasFramework: true)) == .passed)
+            #expect(PlayCoverStaticChecks.version(info: info).status == .passed)
         }
         let info = [
             "CFBundleShortVersionString": "3.1.0.maa.10", "CFBundleIdentifier": "custom.bundle",
             "SUFeedURL": "https://example.com/appcast.xml", "SUPublicEDKey": "other-key",
         ]
-        #expect(status("fork", in: PlayCoverStaticChecks.distribution(info: info, hasFramework: false)) == .passed)
-        #expect(
-            status("bundled-tools", in: PlayCoverStaticChecks.distribution(info: info, hasFramework: false)) == .error)
+        #expect(PlayCoverStaticChecks.version(info: info).status == .passed)
     }
 
     @Test func testVersionWithoutMAAMarkerOrReadableValue() {
         for version in ["3.1.0", "3.1.0.custom"] {
             #expect(
-                status(
-                    "fork",
-                    in: PlayCoverStaticChecks.distribution(
-                        info: ["CFBundleShortVersionString": version], hasFramework: true)) == .error)
+                PlayCoverStaticChecks.version(info: ["CFBundleShortVersionString": version]).status == .error)
         }
         for info: [String: Any] in [[:], ["CFBundleShortVersionString": 3], ["CFBundleShortVersionString": "  "]] {
             #expect(
-                status("fork", in: PlayCoverStaticChecks.distribution(info: info, hasFramework: true)) == .unavailable)
+                PlayCoverStaticChecks.version(info: info).status == .unavailable)
         }
     }
 
@@ -55,7 +50,19 @@ import Testing
         #expect(status("bypass", in: items) == .warning)
         let graphics = PlayCoverStaticChecks.graphics(try settings([:]))
         #expect(graphics.allSatisfy { $0.status == .unavailable })
-        #expect(throws: (any Error).self) { _ = try settings(["maaTools": "true"]) }
+    }
+
+    @Test func configurationTypesDoNotCoerceBooleansOrFractionalIntegers() throws {
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "maaTools": 1, "maaToolsPort": true, "playChain": true, "bypass": false,
+                "windowWidth": 1280.0, "windowHeight": 720.5, "customScaler": 2,
+            ], format: .binary, options: 0)
+        let read = try PlayCoverStaticChecks.readSettings(data)
+        #expect(Set(read.errors.keys) == ["maaTools", "maaToolsPort", "windowHeight"])
+        #expect(read.settings.maaTools == nil && read.settings.maaToolsPort == nil)
+        #expect(read.settings.playChain == true && read.settings.bypass == false)
+        #expect(read.settings.windowWidth == 1280 && read.settings.customScaler == 2)
     }
 
     @Test func testInvalidConnectionFieldDoesNotEraseValidGraphics() throws {
@@ -279,10 +286,18 @@ import Testing
         #expect(status("introspection", in: result.items) == .passed)
         #expect(status("injected-tools", in: result.items) == .passed)
         #expect(result.port == 1717)
+        #expect(status("fork", in: result.items) == .passed)
+        #expect(status("bundled-tools", in: result.items) == .passed)
         #expect(before == (try Data(contentsOf: settingsURL)))
         try write(["CFBundleIdentifier": snapshot.bundleID, "CFBundleExecutable": "game"], at: gameInfo)
         let without = PlayCoverStaticChecks.run(snapshot: snapshot, appURL: app, dataURL: data, screenPermission: false)
         #expect(status("introspection", in: without.items) == .warning)
+        try FileManager.default.removeItem(
+            at: app.appendingPathComponent("Contents/Frameworks/PlayTools.framework/PlayTools"))
+        let missingFramework = PlayCoverStaticChecks.run(
+            snapshot: snapshot, appURL: app, dataURL: data, screenPermission: false)
+        #expect(status("fork", in: missingFramework.items) == .passed)
+        #expect(status("bundled-tools", in: missingFramework.items) == .error)
     }
 
     @Test func oversizedPlistIsUnknownRatherThanDeclaredCorrupt() throws {
@@ -292,14 +307,20 @@ import Testing
             at: root.appendingPathComponent("App Settings"), withIntermediateDirectories: true)
         try Data(repeating: 0, count: 1024 * 1024 + 1).write(
             to: root.appendingPathComponent("App Settings/\(snapshot.bundleID).plist"))
-        let result = PlayCoverStaticChecks.run(snapshot: snapshot, appURL: nil, dataURL: root, screenPermission: false)
+        let result = PlayCoverStaticChecks.run(
+            snapshot: snapshot, appURL: root.appendingPathComponent("PlayCover.app"), dataURL: root,
+            screenPermission: false)
         #expect(status("game-settings", in: result.items) == .unavailable)
         #expect(result.items.first { $0.id == "game-settings" }?.reason.contains("1 MiB") == true)
         #expect(result.items.first { $0.id == "maatools" }?.blockedBy == ["game-settings"])
     }
 
-    @Test func testMissingAuthorizationIsNotMissingInstallation() {
-        let report = PlayCoverStaticChecks.run(snapshot: snapshot, appURL: nil, dataURL: nil, screenPermission: false)
+    @Test func unreadableDirectoriesSkipDependentChecks() {
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let report = PlayCoverStaticChecks.run(
+            snapshot: snapshot, appURL: missing, dataURL: missing, screenPermission: false)
+        #expect(status("playcover-location", in: report.items) == .error)
+        #expect(status("data-location", in: report.items) == .error)
         #expect(status("game-settings", in: report.items) == .unavailable)
         #expect(status("fork", in: report.items) == .unavailable)
     }

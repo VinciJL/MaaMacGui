@@ -59,16 +59,15 @@ struct PlayCoverDiagnosticsView: View {
                     HStack {
                         Button("自定义 PlayCover 应用") { choose(.application) }
                         Text(
-                            access.applicationURL?.path.replacingOccurrences(
-                                of: PlayCoverAccess.userHome.path, with: "~") ?? "未设置"
+                            access.applicationURL.path.replacingOccurrences(
+                                of: PlayCoverAccess.userHome.path, with: "~")
                         )
                         .foregroundStyle(.secondary)
                     }
                     HStack {
                         Button("自定义数据目录") { choose(.data) }
                         Text(
-                            access.dataURL?.path.replacingOccurrences(of: PlayCoverAccess.userHome.path, with: "~")
-                                ?? "未设置"
+                            access.dataURL.path.replacingOccurrences(of: PlayCoverAccess.userHome.path, with: "~")
                         )
                         .foregroundStyle(.secondary)
                     }

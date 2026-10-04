@@ -15,7 +15,7 @@ enum PlayCoverInspectionError: Error, LocalizedError {
     }
 }
 
-struct PlayCoverGameSettings: Decodable, Sendable {
+struct PlayCoverGameSettings: Sendable {
     let maaTools: Bool?
     let maaToolsPort: Int?
     let playChain: Bool?
@@ -45,27 +45,20 @@ enum PlayCoverStaticChecks {
         return data
     }
 
-    static func distribution(info: [String: Any], hasFramework: Bool) -> [PlayCoverDiagnosticItem] {
+    static func version(info: [String: Any]) -> PlayCoverDiagnosticItem {
         let version = (info["CFBundleShortVersionString"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let known = version?.lowercased().contains("maa") == true
         let hasVersion = version?.isEmpty == false
-        return [
-            item(
-                "fork", .distribution, String(localized: "MAA 版本"),
-                known ? .passed : hasVersion ? .error : .unavailable,
-                hasVersion ? version! : String(localized: "未知"),
-                known
-                    ? String(localized: "版本号包含 maa（不区分大小写），符合 MAA 版本要求。")
-                    : hasVersion
-                        ? String(localized: "版本号不包含 maa，需要使用 MAA 版本的 PlayCover。")
-                        : String(localized: "无法读取有效的 PlayCover 版本号。"),
-                known ? "" : String(localized: "从 hguandl/PlayCover Releases 安装 MAA 版本后重新检测。")),
-            item(
-                "bundled-tools", .distribution, String(localized: "随附 PlayTools"), hasFramework ? .passed : .error,
-                hasFramework ? String(localized: "存在") : String(localized: "缺失"),
-                String(localized: "检查 PlayCover.app 内的 PlayTools.framework。"),
-                hasFramework ? "" : String(localized: "重新安装完整的指定 PlayCover fork。")),
-        ]
+        return item(
+            "fork", .distribution, String(localized: "MAA 版本"),
+            known ? .passed : hasVersion ? .error : .unavailable,
+            hasVersion ? version! : String(localized: "未知"),
+            known
+                ? String(localized: "版本号包含 maa（不区分大小写），符合 MAA 版本要求。")
+                : hasVersion
+                    ? String(localized: "版本号不包含 maa，需要使用 MAA 版本的 PlayCover。")
+                    : String(localized: "无法读取有效的 PlayCover 版本号。"),
+            known ? "" : String(localized: "从 hguandl/PlayCover Releases 安装 MAA 版本后重新检测。"))
     }
 
     static func graphics(_ settings: PlayCoverGameSettings, invalidFields: [String: String] = [:])
@@ -147,24 +140,19 @@ enum PlayCoverStaticChecks {
                     "address-core", .maa, String(localized: "Core 地址兼容性"), coreCompatible ? .passed : .error,
                     snapshot.address, String(localized: "当前 Core 按 host:port 解析连接地址；IPv6 与本机回环可比较，但此格式不能用于 Core 连接。"),
                     coreCompatible ? "" : String(localized: "在 MAA 中使用 localhost 或 127.0.0.1，并保持游戏配置端口。")))
-            let match = port.map { endpoint.matchesLocalPort($0) }
-            if match == nil {
+            if let port {
+                let match = endpoint.matchesLocalPort(port)
+                result.append(
+                    item(
+                        "address", .maa, String(localized: "连接地址与端口匹配"), match ? .passed : .error,
+                        snapshot.address,
+                        String(localized: "游戏配置端口：\(port)；localhost 与本机回环地址等价。"),
+                        match ? "" : String(localized: "将 MAA 连接地址改为 localhost:\(port)，并核对游戏标题栏。")))
+            } else {
                 result.append(
                     skipped(
                         "address", .maa, String(localized: "连接地址与端口匹配"), blockedBy: ["game-port"],
                         reason: String(localized: "游戏配置端口未通过检查，无法比较 MAA 地址与游戏端口。")))
-            } else {
-                result.append(
-                    item(
-                        "address", .maa, String(localized: "连接地址与端口匹配"), match == true ? .passed : .error,
-                        snapshot.address,
-                        String(
-                            localized: "游戏配置端口：\(port.map(String.init) ?? String(localized: "未知"))；localhost 与本机回环地址等价。"
-                        ),
-                        match == true
-                            ? ""
-                            : port.map { String(localized: "将 MAA 连接地址改为 localhost:\($0)，并核对游戏标题栏。") }
-                                ?? String(localized: "授权并读取 PlayCover 游戏配置后重新检测。")))
             }
         } else {
             result.append(
@@ -194,140 +182,21 @@ enum PlayCoverStaticChecks {
         return result
     }
 
-    static func run(snapshot: PlayCoverDiagnosticSnapshot, appURL: URL?, dataURL: URL?, screenPermission: Bool)
+    static func run(snapshot: PlayCoverDiagnosticSnapshot, appURL: URL, dataURL: URL, screenPermission: Bool)
         -> PlayCoverStaticResult
     {
         var result = PlayCoverStaticResult(items: [], gameURL: nil, port: nil)
         guard !Task.isCancelled else { return result }
-        if let appURL {
-            do {
-                _ = try FileManager.default.contentsOfDirectory(at: appURL, includingPropertiesForKeys: nil)
-                result.items.append(
-                    item(
-                        "playcover-location", .distribution, String(localized: "PlayCover 应用目录"), .passed, appURL.path,
-                        String(localized: "应用目录可读取；发行信息与框架分别检查。"), ""))
-                let infoURL = appURL.appendingPathComponent("Contents/Info.plist")
-                do {
-                    let info = try plist(at: infoURL)
-                    result.items.append(distribution(info: info, hasFramework: false)[0])
-                } catch {
-                    result.items.append(
-                        readFailure("fork", .distribution, String(localized: "发行信息"), error, path: infoURL))
-                }
-                let framework = appURL.appendingPathComponent("Contents/Frameworks/PlayTools.framework/PlayTools")
-                do {
-                    let handle = try FileHandle(forReadingFrom: framework)
-                    defer { try? handle.close() }
-                    guard try handle.read(upToCount: 1)?.isEmpty == false else {
-                        throw PlayCoverInspectionError.emptyFramework
-                    }
-                    result.items.append(
-                        item(
-                            "bundled-tools", .distribution, String(localized: "随附 PlayTools"), .passed,
-                            String(localized: "存在"),
-                            String(localized: "PlayCover.app 内的 PlayTools.framework 可读取。"), ""))
-                } catch {
-                    result.items.append(
-                        readFailure(
-                            "bundled-tools", .distribution, String(localized: "随附 PlayTools"), error, path: framework))
-                }
-            } catch {
-                result.items.append(
-                    readFailure(
-                        "playcover-location", .distribution, String(localized: "PlayCover 应用目录"), error, path: appURL))
-                result.items += skippedDistribution()
-            }
-        } else {
-            result.items.append(
-                item(
-                    "playcover-location", .distribution, String(localized: "PlayCover 应用目录"), .unavailable,
-                    String(localized: "路径未设置"),
-                    String(localized: "未获得应用位置。"), String(localized: "在“检测路径”中设置 PlayCover 应用。")))
-            result.items += skippedDistribution()
-        }
+        result.items += checkApplication(at: appURL)
         guard !Task.isCancelled else { return result }
-        var dataReadable = false
-        if let dataURL {
-            do {
-                _ = try FileManager.default.contentsOfDirectory(at: dataURL, includingPropertiesForKeys: nil)
-                dataReadable = true
-                result.items.append(
-                    item(
-                        "data-location", .game, String(localized: "PlayCover 数据目录"), .passed, dataURL.path,
-                        String(localized: "数据目录可读取；游戏安装与配置文件分别检查。"), ""))
-            } catch {
-                result.items.append(
-                    readFailure("data-location", .game, String(localized: "PlayCover 数据目录"), error, path: dataURL))
-            }
-        } else {
-            result.items.append(
-                item(
-                    "data-location", .game, String(localized: "PlayCover 数据目录"), .unavailable,
-                    String(localized: "路径未设置"),
-                    String(localized: "未获得数据位置。"), String(localized: "在“检测路径”中设置数据目录。")))
-        }
-        if dataReadable, let dataURL {
-            let gameURL = dataURL.appendingPathComponent("Applications/\(snapshot.bundleID).app")
-            let infoURL = gameURL.appendingPathComponent("Info.plist")
-            do {
-                let info = try plist(at: infoURL)
-                guard info["CFBundleIdentifier"] as? String == snapshot.bundleID,
-                    let executable = info["CFBundleExecutable"] as? String, !executable.isEmpty,
-                    !executable.contains("/"), executable != "..", executable != "."
-                else { throw PlayCoverInspectionError.invalidGameInfo }
-                result.gameURL = gameURL
-                result.items.append(
-                    item(
-                        "game-install", .game, String(localized: "游戏安装"), .passed, gameURL.path,
-                        String(localized: "游戏标识符合当前 MAA 客户端。"), ""))
-                let executableURL = gameURL.appendingPathComponent(executable)
-                do {
-                    let libraries = try MachOLibraries.read(at: executableURL)
-                    let hasTools = libraries.contains {
-                        $0.contains("PlayTools.framework/") && $0.hasSuffix("/PlayTools")
-                    }
-                    result.items.append(
-                        item(
-                            "injected-tools", .game, String(localized: "PlayTools 加载项"), hasTools ? .passed : .error,
-                            hasTools ? String(localized: "已注入") : String(localized: "缺失"),
-                            String(localized: "读取游戏可执行文件的动态库加载项。"),
-                            hasTools ? "" : String(localized: "在指定 PlayCover fork 中启用 PlayTools 或重新安装游戏。")))
-                } catch {
-                    result.items.append(
-                        readFailure(
-                            "injected-tools", .game, String(localized: "PlayTools 加载项"), error, path: executableURL))
-                }
-                let environment = info["LSEnvironment"] as? [String: Any]
-                let paths = (environment?["DYLD_LIBRARY_PATH"] as? String ?? "").split(separator: ":")
-                let hasIntrospection = paths.contains { $0 == "/usr/lib/system/introspection" }
-                result.items.append(
-                    item(
-                        "introspection", .game, String(localized: "内省库"), hasIntrospection ? .passed : .warning,
-                        hasIntrospection ? String(localized: "已插入") : String(localized: "未插入"),
-                        String(localized: "依据游戏 Info.plist 的 DYLD_LIBRARY_PATH。"),
-                        hasIntrospection ? "" : String(localized: "PlayCover → 游戏设置 → 绕过 → 开启插入内省库，随后重启游戏。")))
-            } catch {
-                result.items.append(readFailure("game-install", .game, String(localized: "游戏安装"), error, path: infoURL))
-                result.items += skippedGameInfo()
-            }
+        let directory = checkDirectory(
+            dataURL, id: "data-location", group: .game, title: String(localized: "PlayCover 数据目录"),
+            reason: String(localized: "数据目录可读取；游戏安装与配置文件分别检查。"))
+        result.items.append(directory)
+        if directory.status == .passed {
+            checkGame(at: dataURL, bundleID: snapshot.bundleID, result: &result)
             guard !Task.isCancelled else { return result }
-            // Settings can still be inspected when the installed game is missing
-            // or its executable is invalid; they do not depend on those files.
-            let settingsURL = dataURL.appendingPathComponent("App Settings/\(snapshot.bundleID).plist")
-            do {
-                let read = try readSettings(configurationData(at: settingsURL))
-                result.items.append(
-                    item(
-                        "game-settings", .game, String(localized: "游戏配置文件"), .passed, settingsURL.path,
-                        String(localized: "配置文件可解析；每个字段独立判断。"), ""))
-                result.items += settingsItems(read.settings, invalidFields: read.errors)
-                if let port = read.settings.maaToolsPort, (1...65535).contains(port) { result.port = port }
-                result.items += graphics(read.settings, invalidFields: read.errors)
-            } catch {
-                result.items.append(
-                    readFailure("game-settings", .game, String(localized: "游戏配置文件"), error, path: settingsURL))
-                result.items += skippedSettings()
-            }
+            checkSettings(at: dataURL, bundleID: snapshot.bundleID, result: &result)
         } else {
             result.items.append(
                 skipped(
@@ -342,6 +211,115 @@ enum PlayCoverStaticChecks {
         }
         result.items += maa(snapshot, port: result.port, screenPermission: screenPermission)
         return result
+    }
+
+    private static func checkDirectory(
+        _ url: URL, id: String, group: PlayCoverDiagnosticGroup, title: String, reason: String
+    ) -> PlayCoverDiagnosticItem {
+        do {
+            _ = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
+            return item(id, group, title, .passed, url.path, reason, "")
+        } catch {
+            return readFailure(id, group, title, error, path: url)
+        }
+    }
+
+    private static func checkApplication(at appURL: URL) -> [PlayCoverDiagnosticItem] {
+        let directory = checkDirectory(
+            appURL, id: "playcover-location", group: .distribution, title: String(localized: "PlayCover 应用目录"),
+            reason: String(localized: "应用目录可读取；发行信息与框架分别检查。"))
+        guard directory.status == .passed else { return [directory] + skippedDistribution() }
+        var items = [directory]
+        let infoURL = appURL.appendingPathComponent("Contents/Info.plist")
+        do {
+            let info = try plist(at: infoURL)
+            items.append(version(info: info))
+        } catch {
+            items.append(
+                readFailure("fork", .distribution, String(localized: "发行信息"), error, path: infoURL))
+        }
+        let framework = appURL.appendingPathComponent("Contents/Frameworks/PlayTools.framework/PlayTools")
+        do {
+            let handle = try FileHandle(forReadingFrom: framework)
+            defer { try? handle.close() }
+            guard try handle.read(upToCount: 1)?.isEmpty == false else {
+                throw PlayCoverInspectionError.emptyFramework
+            }
+            items.append(
+                item(
+                    "bundled-tools", .distribution, String(localized: "随附 PlayTools"), .passed,
+                    String(localized: "存在"),
+                    String(localized: "PlayCover.app 内的 PlayTools.framework 可读取。"), ""))
+        } catch {
+            items.append(
+                readFailure(
+                    "bundled-tools", .distribution, String(localized: "随附 PlayTools"), error, path: framework))
+        }
+        return items
+    }
+
+    private static func checkGame(at dataURL: URL, bundleID: String, result: inout PlayCoverStaticResult) {
+        let gameURL = dataURL.appendingPathComponent("Applications/\(bundleID).app")
+        let infoURL = gameURL.appendingPathComponent("Info.plist")
+        do {
+            let info = try plist(at: infoURL)
+            guard info["CFBundleIdentifier"] as? String == bundleID,
+                let executable = info["CFBundleExecutable"] as? String, !executable.isEmpty,
+                !executable.contains("/"), executable != "..", executable != "."
+            else { throw PlayCoverInspectionError.invalidGameInfo }
+            result.gameURL = gameURL
+            result.items.append(
+                item(
+                    "game-install", .game, String(localized: "游戏安装"), .passed, gameURL.path,
+                    String(localized: "游戏标识符合当前 MAA 客户端。"), ""))
+            let executableURL = gameURL.appendingPathComponent(executable)
+            do {
+                let libraries = try MachOLibraries.read(at: executableURL)
+                let hasTools = libraries.contains {
+                    $0.contains("PlayTools.framework/") && $0.hasSuffix("/PlayTools")
+                }
+                result.items.append(
+                    item(
+                        "injected-tools", .game, String(localized: "PlayTools 加载项"), hasTools ? .passed : .error,
+                        hasTools ? String(localized: "已注入") : String(localized: "缺失"),
+                        String(localized: "读取游戏可执行文件的动态库加载项。"),
+                        hasTools ? "" : String(localized: "在指定 PlayCover fork 中启用 PlayTools 或重新安装游戏。")))
+            } catch {
+                result.items.append(
+                    readFailure(
+                        "injected-tools", .game, String(localized: "PlayTools 加载项"), error, path: executableURL))
+            }
+            let environment = info["LSEnvironment"] as? [String: Any]
+            let paths = (environment?["DYLD_LIBRARY_PATH"] as? String ?? "").split(separator: ":")
+            let hasIntrospection = paths.contains { $0 == "/usr/lib/system/introspection" }
+            result.items.append(
+                item(
+                    "introspection", .game, String(localized: "内省库"), hasIntrospection ? .passed : .warning,
+                    hasIntrospection ? String(localized: "已插入") : String(localized: "未插入"),
+                    String(localized: "依据游戏 Info.plist 的 DYLD_LIBRARY_PATH。"),
+                    hasIntrospection ? "" : String(localized: "PlayCover → 游戏设置 → 绕过 → 开启插入内省库，随后重启游戏。")))
+        } catch {
+            result.items.append(readFailure("game-install", .game, String(localized: "游戏安装"), error, path: infoURL))
+            result.items += skippedGameInfo()
+        }
+    }
+
+    private static func checkSettings(at dataURL: URL, bundleID: String, result: inout PlayCoverStaticResult) {
+        let settingsURL = dataURL.appendingPathComponent("App Settings/\(bundleID).plist")
+        do {
+            let read = try readSettings(configurationData(at: settingsURL))
+            result.items.append(
+                item(
+                    "game-settings", .game, String(localized: "游戏配置文件"), .passed, settingsURL.path,
+                    String(localized: "配置文件可解析；每个字段独立判断。"), ""))
+            result.items += settingsItems(read.settings, invalidFields: read.errors)
+            if let port = read.settings.maaToolsPort, (1...65535).contains(port) { result.port = port }
+            result.items += graphics(read.settings, invalidFields: read.errors)
+        } catch {
+            result.items.append(
+                readFailure("game-settings", .game, String(localized: "游戏配置文件"), error, path: settingsURL))
+            result.items += skippedSettings()
+        }
     }
 
     private static func skippedDistribution() -> [PlayCoverDiagnosticItem] {
@@ -408,28 +386,28 @@ enum PlayCoverStaticChecks {
             ], errors: invalidFields)
     }
 
-    /// Decode each known field independently, so an invalid graphics field
+    /// Validate each known field independently, so an invalid graphics field
     /// cannot erase a valid MaaTools switch/port (and vice versa).
     static func readSettings(_ data: Data) throws -> (settings: PlayCoverGameSettings, errors: [String: String]) {
         guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
             throw CocoaError(.propertyListReadCorrupt)
         }
-        var valid = [String: Any]()
         var errors = [String: String]()
-        for key in [
-            "maaTools", "maaToolsPort", "playChain", "bypass", "resolution", "windowWidth", "windowHeight",
-            "customScaler", "displayRotation",
-        ] {
-            guard let value = plist[key] else { continue }
-            do {
-                let field = try PropertyListSerialization.data(
-                    fromPropertyList: [key: value], format: .binary, options: 0)
-                _ = try PropertyListDecoder().decode(PlayCoverGameSettings.self, from: field)
-                valid[key] = value
-            } catch { errors[key] = error.localizedDescription }
+        func field<T>(_ key: String) -> T? {
+            guard let value = plist[key] else { return nil }
+            let isBoolean = (value as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() } ?? false
+            guard isBoolean == (T.self == Bool.self), let value = value as? T else {
+                errors[key] = String(localized: "配置字段类型无效")
+                return nil
+            }
+            return value
         }
-        let validated = try PropertyListSerialization.data(fromPropertyList: valid, format: .binary, options: 0)
-        return (try PropertyListDecoder().decode(PlayCoverGameSettings.self, from: validated), errors)
+        let settings = PlayCoverGameSettings(
+            maaTools: field("maaTools"), maaToolsPort: field("maaToolsPort"),
+            playChain: field("playChain"), bypass: field("bypass"), resolution: field("resolution"),
+            windowWidth: field("windowWidth"), windowHeight: field("windowHeight"),
+            customScaler: field("customScaler"), displayRotation: field("displayRotation"))
+        return (settings, errors)
     }
 
     private static func applyFieldErrors(
@@ -480,10 +458,10 @@ enum PlayCoverStaticChecks {
         case .oversizedFile, .oversizedLoadCommands: overLimit = true
         default: overLimit = false
         }
-        var malformed = error is PlayCoverInspectionError && !overLimit
-        if case .invalidPayload? = error as? MaaToolsError { malformed = true }
+        let invalidInspection = error is PlayCoverInspectionError && !overLimit
         let error = error as NSError
-        malformed = malformed || error.domain == NSCocoaErrorDomain && error.code == NSPropertyListReadCorruptError
+        let malformed =
+            invalidInspection || error.domain == NSCocoaErrorDomain && error.code == NSPropertyListReadCorruptError
         let missing =
             error.domain == NSCocoaErrorDomain
             && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code)

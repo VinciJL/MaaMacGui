@@ -65,131 +65,131 @@ import Foundation
                 phase = ""
                 task = nil
             }
-            var failureID = "launch-failure"
-            var failureTitle = String(localized: "启动游戏")
-            do {
-                try Task.checkCancellation()
-                phase = String(localized: "检查版本与配置")
-                let appURL = access.applicationURL
-                let dataURL = access.dataURL
-                let permission = CGPreflightScreenCaptureAccess()
-                let scan = Task.detached {
-                    PlayCoverStaticChecks.run(
-                        snapshot: snapshot, appURL: appURL, dataURL: dataURL,
-                        screenPermission: permission)
-                }
-                let result = await withTaskCancellationHandler {
-                    await scan.value
-                } onCancel: {
-                    scan.cancel()
-                }
-                try Task.checkCancellation()
-                report?.items = result.items
-                report?.items.append(
-                    PlayCoverStaticChecks.item(
-                        "maa-idle", .maa, String(localized: "MAA 任务状态"),
-                        runtimeAllowed ? .passed : .warning,
-                        runtimeAllowed ? String(localized: "空闲") : String(localized: "正在执行任务"),
-                        String(localized: "任务运行期间仅进行静态检查。"), runtimeAllowed ? "" : String(localized: "等待 MAA 空闲后重新检测。"))
-                )
-                guard runtimeAllowed else {
-                    report?.items.append(
-                        PlayCoverStaticChecks.skipped(
-                            "runtime-skipped", .runtime, String(localized: "运行检查"),
-                            blockedBy: ["maa-idle"], reason: String(localized: "MAA 正在执行任务，未启动游戏、连接服务或获取截图。")))
-                    return
-                }
-                // An explicit launch only requires a verified installation.
-                // Service readiness is evaluated separately before waiting or probing.
-                var running = false
-                var launched = false
-                if launch {
-                    guard let gameURL = result.gameURL else {
-                        report?.items.append(
-                            PlayCoverStaticChecks.skipped(
-                                "launch-failure", .runtime, String(localized: "启动游戏"),
-                                blockedBy: ["game-install"], reason: String(localized: "游戏安装未通过检查，未尝试启动游戏。")))
-                        report?.items.append(PlayCoverStaticChecks.blockedRuntime(result.runtimeBlockers))
-                        return
-                    }
-                    running = isGameRunning(snapshot.bundleID)
-                    if !running {
-                        phase = String(localized: "启动游戏")
-                        try await openGame(gameURL)
-                        try Task.checkCancellation()
-                        launched = true
-                        report?.items.append(
-                            PlayCoverStaticChecks.item(
-                                "game-launch", .runtime, String(localized: "启动游戏"), .passed,
-                                snapshot.clientName, String(localized: "已按当前客户端请求启动游戏。"), ""))
-                    }
-                }
-                let blockers = result.runtimeBlockers
-                guard blockers.isEmpty else {
-                    report?.items.append(PlayCoverStaticChecks.blockedRuntime(blockers))
-                    return
-                }
-                if launched {
-                    phase = String(localized: "等待 MaaTools 服务")
-                    failureID = "service-wait"
-                    failureTitle = String(localized: "MaaTools 服务等待")
-                    guard let port = result.port else {
-                        report?.items.append(
-                            PlayCoverStaticChecks.skipped(
-                                "runtime-skipped", .runtime, String(localized: "服务与截图"),
-                                blockedBy: ["game-port"], reason: String(localized: "未获取到有效的游戏配置端口，未等待或连接服务。")))
-                        return
-                    }
-                    try await waitForService("localhost:\(port)")
-                    running = isGameRunning(snapshot.bundleID)
-                } else if !launch {
-                    running = isGameRunning(snapshot.bundleID)
-                }
-                report?.items.append(
-                    PlayCoverStaticChecks.item(
-                        "game-process", .runtime, String(localized: "游戏进程"), running ? .passed : .unavailable,
-                        running ? String(localized: "运行中") : String(localized: "未运行"),
-                        String(localized: "当前客户端：\(snapshot.clientName)。"),
-                        running ? "" : String(localized: "点击“启动游戏并继续检测”，或手动启动后重新检测。")))
-                guard running else {
-                    report?.items.append(
-                        PlayCoverStaticChecks.skipped(
-                            "runtime-skipped", .runtime, String(localized: "服务与截图"),
-                            blockedBy: ["game-process"], reason: String(localized: "游戏未运行，未连接 MaaTools 或获取截图。")))
-                    return
-                }
-                phase = String(localized: "检查 MaaTools 与实际截图")
-                failureID = "runtime-handshake"
-                failureTitle = String(localized: "MAA 配置地址的运行检查")
-                if MaaToolsEndpoint(snapshot.address) != nil {
-                    report?.items += try await inspect(
-                        snapshot, snapshot.address, "runtime", String(localized: "MAA 配置地址"), permission)
-                } else {
-                    report?.items.append(
-                        PlayCoverStaticChecks.skipped(
-                            "runtime-handshake", .runtime, String(localized: "MAA 配置地址"),
-                            blockedBy: ["address-format"], reason: String(localized: "配置地址格式无效，未连接此地址；仍可独立探测游戏配置端口。")))
-                }
-                if let port = result.port, MaaToolsEndpoint(snapshot.address)?.matchesLocalPort(port) != true {
-                    try Task.checkCancellation()
-                    phase = String(localized: "检查游戏配置端口")
-                    failureID = "game-port-handshake"
-                    failureTitle = String(localized: "游戏配置端口的运行检查")
-                    report?.items += try await inspect(
-                        snapshot, "localhost:\(port)", "game-port", String(localized: "游戏配置端口"), permission)
-                }
-            } catch is CancellationError {
-                // `cancel` has already recorded why this run was interrupted.
-            } catch {
-                report?.items.append(
-                    PlayCoverStaticChecks.item(
-                        failureID, .runtime, failureTitle, .error,
-                        phase, error.localizedDescription, String(localized: "核对游戏、MaaTools 与端口后重新检测。")))
+            guard !Task.isCancelled else { return }
+            phase = String(localized: "检查版本与配置")
+            let permission = CGPreflightScreenCaptureAccess()
+            let result = await scan(snapshot: snapshot, access: access, screenPermission: permission)
+            guard !Task.isCancelled else { return }
+            report?.items = result.items
+            report?.items.append(
+                PlayCoverStaticChecks.item(
+                    "maa-idle", .maa, String(localized: "MAA 任务状态"), runtimeAllowed ? .passed : .warning,
+                    runtimeAllowed ? String(localized: "空闲") : String(localized: "正在执行任务"),
+                    String(localized: "任务运行期间仅进行静态检查。"), runtimeAllowed ? "" : String(localized: "等待 MAA 空闲后重新检测。")))
+            guard runtimeAllowed else {
                 report?.items.append(
                     PlayCoverStaticChecks.skipped(
-                        "runtime-skipped", .runtime, String(localized: "后续运行检查"),
-                        blockedBy: [failureID], reason: String(localized: "\(failureTitle)失败，后续运行检查已跳过。")))
+                        "runtime-skipped", .runtime, String(localized: "运行检查"), blockedBy: ["maa-idle"],
+                        reason: String(localized: "MAA 正在执行任务，未启动游戏、连接服务或获取截图。")))
+                return
             }
+            await checkRuntime(snapshot: snapshot, result: result, launch: launch, permission: permission)
+        }
+    }
+
+    private func scan(
+        snapshot: PlayCoverDiagnosticSnapshot, access: PlayCoverAccess, screenPermission: Bool
+    ) async -> PlayCoverStaticResult {
+        let appURL = access.applicationURL
+        let dataURL = access.dataURL
+        let scan = Task.detached {
+            PlayCoverStaticChecks.run(
+                snapshot: snapshot, appURL: appURL, dataURL: dataURL, screenPermission: screenPermission)
+        }
+        return await withTaskCancellationHandler {
+            await scan.value
+        } onCancel: {
+            scan.cancel()
+        }
+    }
+
+    private func checkRuntime(
+        snapshot: PlayCoverDiagnosticSnapshot, result: PlayCoverStaticResult, launch: Bool, permission: Bool
+    ) async {
+        var failureID = "launch-failure"
+        var failureTitle = String(localized: "启动游戏")
+        do {
+            try Task.checkCancellation()
+            // An explicit launch only requires a verified installation.
+            // Service readiness is evaluated separately before waiting or probing.
+            var launched = false
+            if launch {
+                guard let gameURL = result.gameURL else {
+                    report?.items.append(
+                        PlayCoverStaticChecks.skipped(
+                            "launch-failure", .runtime, String(localized: "启动游戏"),
+                            blockedBy: ["game-install"], reason: String(localized: "游戏安装未通过检查，未尝试启动游戏。")))
+                    report?.items.append(PlayCoverStaticChecks.blockedRuntime(result.runtimeBlockers))
+                    return
+                }
+                if !isGameRunning(snapshot.bundleID) {
+                    phase = String(localized: "启动游戏")
+                    try await openGame(gameURL)
+                    try Task.checkCancellation()
+                    launched = true
+                    report?.items.append(
+                        PlayCoverStaticChecks.item(
+                            "game-launch", .runtime, String(localized: "启动游戏"), .passed,
+                            snapshot.clientName, String(localized: "已按当前客户端请求启动游戏。"), ""))
+                }
+            }
+            let blockers = result.runtimeBlockers
+            guard blockers.isEmpty, let port = result.port else {
+                report?.items.append(PlayCoverStaticChecks.blockedRuntime(blockers))
+                return
+            }
+            if launched {
+                phase = String(localized: "等待 MaaTools 服务")
+                failureID = "service-wait"
+                failureTitle = String(localized: "MaaTools 服务等待")
+                try await waitForService("localhost:\(port)")
+            }
+            let running = isGameRunning(snapshot.bundleID)
+            report?.items.append(
+                PlayCoverStaticChecks.item(
+                    "game-process", .runtime, String(localized: "游戏进程"), running ? .passed : .unavailable,
+                    running ? String(localized: "运行中") : String(localized: "未运行"),
+                    String(localized: "当前客户端：\(snapshot.clientName)。"),
+                    running ? "" : String(localized: "点击“启动游戏并继续检测”，或手动启动后重新检测。")))
+            guard running else {
+                report?.items.append(
+                    PlayCoverStaticChecks.skipped(
+                        "runtime-skipped", .runtime, String(localized: "服务与截图"),
+                        blockedBy: ["game-process"], reason: String(localized: "游戏未运行，未连接 MaaTools 或获取截图。")))
+                return
+            }
+            phase = String(localized: "检查 MaaTools 与实际截图")
+            failureID = "runtime-handshake"
+            failureTitle = String(localized: "MAA 配置地址的运行检查")
+            let endpoint = MaaToolsEndpoint(snapshot.address)
+            if endpoint != nil {
+                report?.items += try await inspect(
+                    snapshot, snapshot.address, "runtime", String(localized: "MAA 配置地址"), permission)
+            } else {
+                report?.items.append(
+                    PlayCoverStaticChecks.skipped(
+                        "runtime-handshake", .runtime, String(localized: "MAA 配置地址"),
+                        blockedBy: ["address-format"], reason: String(localized: "配置地址格式无效，未连接此地址；仍可独立探测游戏配置端口。")))
+            }
+            if endpoint?.matchesLocalPort(port) != true {
+                try Task.checkCancellation()
+                phase = String(localized: "检查游戏配置端口")
+                failureID = "game-port-handshake"
+                failureTitle = String(localized: "游戏配置端口的运行检查")
+                report?.items += try await inspect(
+                    snapshot, "localhost:\(port)", "game-port", String(localized: "游戏配置端口"), permission)
+            }
+        } catch is CancellationError {
+            // `cancel` has already recorded why this run was interrupted.
+        } catch {
+            report?.items.append(
+                PlayCoverStaticChecks.item(
+                    failureID, .runtime, failureTitle, .error,
+                    phase, error.localizedDescription, String(localized: "核对游戏、MaaTools 与端口后重新检测。")))
+            report?.items.append(
+                PlayCoverStaticChecks.skipped(
+                    "runtime-skipped", .runtime, String(localized: "后续运行检查"),
+                    blockedBy: [failureID], reason: String(localized: "\(failureTitle)失败，后续运行检查已跳过。")))
         }
     }
 }
