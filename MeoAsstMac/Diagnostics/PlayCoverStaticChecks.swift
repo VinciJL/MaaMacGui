@@ -28,9 +28,6 @@ struct PlayCoverGameSettings: Decodable, Sendable {
 }
 
 enum PlayCoverStaticChecks {
-    static let forkFeed = "https://raw.githubusercontent.com/hguandl/PlayCover/update/appcast.xml"
-    static let forkKey = "M7+pTisnfp6xtF7c6MK5ggzCD/5m0Xxvh0IGRVa/0TM="
-
     static func plist(at url: URL) throws -> [String: Any] {
         let data = try configurationData(at: url)
         guard let result = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
@@ -49,25 +46,20 @@ enum PlayCoverStaticChecks {
     }
 
     static func distribution(info: [String: Any], hasFramework: Bool) -> [PlayCoverDiagnosticItem] {
-        let bundleID = info["CFBundleIdentifier"] as? String
-        let version = info["CFBundleShortVersionString"] as? String
-        let feed = info["SUFeedURL"] as? String
-        let key = info["SUPublicEDKey"] as? String
-        let complete = bundleID != nil && version != nil && feed != nil && key != nil
-        let known =
-            bundleID == "io.playcover.PlayCover" && version?.contains(".maa.") == true
-            && feed == forkFeed && key == forkKey
+        let version = (info["CFBundleShortVersionString"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let known = version?.lowercased().contains("maa") == true
+        let hasVersion = version?.isEmpty == false
         return [
             item(
-                "fork", .distribution, String(localized: "指定 fork"), known ? .passed : complete ? .error : .unavailable,
-                String(
-                    localized:
-                        "\(version ?? String(localized: "未知")) · \(bundleID ?? String(localized: "未知"))\n更新源：\(feed ?? String(localized: "未知"))\n更新公钥：\(key ?? String(localized: "未知"))"
-                ),
+                "fork", .distribution, String(localized: "MAA 版本"),
+                known ? .passed : hasVersion ? .error : .unavailable,
+                hasVersion ? version! : String(localized: "未知"),
                 known
-                    ? String(localized: "发行元信息符合 hguandl/PlayCover 的 MAA fork。")
-                    : String(localized: "未能识别为指定的 MAA fork；本检查依据本地发行元信息。"),
-                known ? "" : String(localized: "从 hguandl/PlayCover Releases 安装指定 fork，并重新选择应用。")),
+                    ? String(localized: "版本号包含 maa（不区分大小写），符合 MAA 版本要求。")
+                    : hasVersion
+                        ? String(localized: "版本号不包含 maa，需要使用 MAA 版本的 PlayCover。")
+                        : String(localized: "无法读取有效的 PlayCover 版本号。"),
+                known ? "" : String(localized: "从 hguandl/PlayCover Releases 安装 MAA 版本后重新检测。")),
             item(
                 "bundled-tools", .distribution, String(localized: "随附 PlayTools"), hasFramework ? .passed : .error,
                 hasFramework ? String(localized: "存在") : String(localized: "缺失"),

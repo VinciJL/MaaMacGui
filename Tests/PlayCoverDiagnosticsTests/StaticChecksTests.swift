@@ -19,20 +19,32 @@ import Testing
         items.first { $0.id == id }?.status
     }
 
-    @Test func testForkRequiresAllDistributionMarkersAndFramework() {
-        var info: [String: Any] = [
-            "CFBundleIdentifier": "io.playcover.PlayCover",
-            "CFBundleShortVersionString": "3.1.0.maa.10",
-            "SUFeedURL": PlayCoverStaticChecks.forkFeed,
-            "SUPublicEDKey": PlayCoverStaticChecks.forkKey,
+    @Test func testForkOnlyRequiresMAAVersionMarker() {
+        for version in ["3.1.0.maa.10", "3.1.0-maa", "maa", "3.1.0.MAA.10"] {
+            let info = ["CFBundleShortVersionString": version]
+            #expect(status("fork", in: PlayCoverStaticChecks.distribution(info: info, hasFramework: true)) == .passed)
+        }
+        let info = [
+            "CFBundleShortVersionString": "3.1.0.maa.10", "CFBundleIdentifier": "custom.bundle",
+            "SUFeedURL": "https://example.com/appcast.xml", "SUPublicEDKey": "other-key",
         ]
-        #expect(status("fork", in: PlayCoverStaticChecks.distribution(info: info, hasFramework: true)) == .passed)
-        info["SUFeedURL"] = "https://playcover.io/appcast.xml"
-        #expect(status("fork", in: PlayCoverStaticChecks.distribution(info: info, hasFramework: true)) == .error)
-        info.removeValue(forKey: "SUPublicEDKey")
-        #expect(status("fork", in: PlayCoverStaticChecks.distribution(info: info, hasFramework: true)) == .unavailable)
+        #expect(status("fork", in: PlayCoverStaticChecks.distribution(info: info, hasFramework: false)) == .passed)
         #expect(
             status("bundled-tools", in: PlayCoverStaticChecks.distribution(info: info, hasFramework: false)) == .error)
+    }
+
+    @Test func testVersionWithoutMAAMarkerOrReadableValue() {
+        for version in ["3.1.0", "3.1.0.custom"] {
+            #expect(
+                status(
+                    "fork",
+                    in: PlayCoverStaticChecks.distribution(
+                        info: ["CFBundleShortVersionString": version], hasFramework: true)) == .error)
+        }
+        for info: [String: Any] in [[:], ["CFBundleShortVersionString": 3], ["CFBundleShortVersionString": "  "]] {
+            #expect(
+                status("fork", in: PlayCoverStaticChecks.distribution(info: info, hasFramework: true)) == .unavailable)
+        }
     }
 
     @Test func testMissingFieldsAreUnknownRatherThanDefaulted() throws {
@@ -244,7 +256,6 @@ import Testing
         try write(
             [
                 "CFBundleIdentifier": "io.playcover.PlayCover", "CFBundleShortVersionString": "3.1.0.maa.10",
-                "SUFeedURL": PlayCoverStaticChecks.forkFeed, "SUPublicEDKey": PlayCoverStaticChecks.forkKey,
             ],
             at: app.appendingPathComponent("Contents/Info.plist"))
         try Data([1]).write(to: app.appendingPathComponent("Contents/Frameworks/PlayTools.framework/PlayTools"))
